@@ -1,0 +1,11 @@
+[workspace]
+
+members = [
+    "qc-core",
+]
+
+[profile.release]
+lto = "thin"
+
+[profile.bench]
+lto = "thin"
