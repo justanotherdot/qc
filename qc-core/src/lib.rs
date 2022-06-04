@@ -243,20 +243,25 @@ pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
     buffer
 }
 
-// Gen needs seed _and_ size.
-// remove need for Clone bound.
+// Needs size _and_ seed.
+// also needs ability to _ignore_ size.
+// unless gen is the thing that ignores shrink?
+pub struct Gen<A> {
+    pub gen: fn(usize) -> A,
+    pub shrink: fn(A) -> Option<A>,
+    //pub shrinks: Box<dyn Iterator<Item = A>>,
+}
+
+impl<A> Gen<A> {
+    pub fn new(gen: fn(usize) -> A, shrink: fn(A) -> Option<A>) -> Self {
+        Gen { gen, shrink }
+    }
+}
+
+// remove need for Clone bound?
 // shrinking needs to be made optional?
-// probably should be a macro, to simplify passing, etc.
-// but doesn't have to be.
-pub fn qc<A: Debug + Clone>(
-    check: fn(&A) -> bool,
-    gen: fn(usize) -> A,
-    // actually should be an Iterator.
-    // OR could create the Iterator from the pure function.
-    shrink: fn(A) -> Option<A>,
-    size: usize,
-    runs: usize,
-) {
+pub fn qc<A: Debug + Clone>(check: fn(&A) -> bool, gen: Gen<A>, size: usize, runs: usize) {
+    let Gen { gen, shrink } = gen;
     for _ in 0..runs {
         // generate.
         let input = gen(size);
@@ -302,18 +307,16 @@ pub fn qc<A: Debug + Clone>(
 
 pub struct Qc<A> {
     runs: usize,
-    size: usize, // TODO: ought to be optional.
-    gen: fn(usize) -> A,
-    shrink: fn(A) -> Option<A>,
+    size: usize, // optional size?
+    gen: Gen<A>,
 }
 
 impl<A: Debug + Clone> Qc<A> {
-    pub fn new(gen: fn(usize) -> A, shrink: fn(A) -> Option<A>) -> Self {
+    pub fn new(gen: Gen<A>) -> Self {
         Qc {
             runs: 100,
             size: 100,
-            gen,
-            shrink,
+            gen: gen,
         }
     }
 
@@ -326,7 +329,7 @@ impl<A: Debug + Clone> Qc<A> {
     }
 
     pub fn check(self, property: fn(&A) -> bool) {
-        qc(property, self.gen, self.shrink, self.size, self.runs)
+        qc(property, self.gen, self.size, self.runs)
     }
 }
 
@@ -342,11 +345,15 @@ mod test {
 
     #[test]
     fn playground() {
-        qc(prop_all_even, gen_vec_even_i64, shrink_vec_i64, 100, 100);
+        qc(
+            prop_all_even,
+            Gen::new(gen_vec_even_i64, shrink_vec_i64),
+            100,
+            100,
+        );
         qc(
             prop_collatz_always_one,
-            gen_u64,
-            shrink_u64,
+            Gen::new(gen_u64, shrink_u64),
             1000,
             // if we go as large as the full space for u64, we will
             // run into panics on multiply, which is good! but not
@@ -354,23 +361,28 @@ mod test {
             //u64::MAX as usize,
             100,
         );
-        qc(prop_abs_always_positive, gen_i64, shrink_i64, 100, 100);
+        qc(
+            prop_abs_always_positive,
+            Gen::new(gen_i64, shrink_i64),
+            100,
+            100,
+        );
 
-        Qc::new(gen_vec_even_i64, shrink_vec_i64).check(prop_all_even);
+        Qc::new(Gen::new(gen_vec_even_i64, shrink_vec_i64)).check(prop_all_even);
 
-        Qc::new(gen_u64, shrink_u64)
+        Qc::new(Gen::new(gen_u64, shrink_u64))
             .with_size(1000)
             .check(prop_collatz_always_one);
 
-        Qc::new(gen_i64, shrink_i64)
+        Qc::new(Gen::new(gen_i64, shrink_i64))
             .with_size(i64::MAX as usize)
             .check(prop_abs_always_positive);
 
-        Qc::new(gen_color_non_brown, shrink_color)
+        Qc::new(Gen::new(gen_color_non_brown, shrink_color))
             .with_size(i64::MAX as usize)
             .check(prop_color_is_never_brown);
 
-        Qc::new(gen_coordinate, shrink_coordinate)
+        Qc::new(Gen::new(gen_coordinate, shrink_coordinate))
             .with_size(f64::MAX as usize)
             .check(prop_wrap_longitude_always_in_bounds);
     }
