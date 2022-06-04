@@ -98,6 +98,75 @@ pub fn report<A: Debug>(rounds: usize, witness: A) {
     );
 }
 
+pub fn oneof<A: Clone>(options: &[fn(usize) -> A], size: usize) -> A {
+    let equally_weighted_options: Vec<_> = options.into_iter().map(|x| (1, *x)).collect();
+    frequency(equally_weighted_options.as_slice(), size)
+}
+
+pub fn frequency<A: Clone>(weighted_options: &[(usize, fn(usize) -> A)], size: usize) -> A {
+    assert!(!weighted_options.is_empty());
+    assert!(!weighted_options.iter().all(|(w, _)| w == &0));
+    assert!(!weighted_options.iter().any(|(w, _)| w < &0));
+    let total: usize = weighted_options.iter().map(|(w, _)| w).sum();
+    let mut choice = rand::random::<usize>() % total + 1;
+    for (weight, option) in weighted_options {
+        if choice <= *weight {
+            return option(size);
+        }
+        choice -= weight;
+    }
+    std::unreachable!()
+}
+
+#[derive(Debug, Clone)]
+pub enum Color {
+    Red,
+    Green,
+    Blue,
+    Brown,
+}
+
+impl Color {
+    pub fn is_brown(&self) -> bool {
+        match self {
+            Color::Brown => true,
+            _ => false,
+        }
+    }
+}
+
+pub fn gen_color(size: usize) -> Color {
+    oneof(
+        &[
+            |_| Color::Red,
+            |_| Color::Green,
+            |_| Color::Blue,
+            |_| Color::Brown,
+        ],
+        size,
+    )
+}
+
+pub fn gen_color_non_brown(size: usize) -> Color {
+    oneof(&[|_| Color::Red, |_| Color::Green, |_| Color::Blue], size)
+}
+
+pub fn shrink_color(_color: Color) -> Option<Color> {
+    None
+}
+
+pub fn prop_color_is_never_brown(color: &Color) -> bool {
+    !color.is_brown()
+}
+
+pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
+    let mut buffer = Vec::with_capacity(count);
+    for _ in 0..count {
+        buffer.push(gen(size));
+    }
+    buffer
+}
+
 // remove need for Clone bound.
 // shrinking needs to be made optional?
 // probably should be a macro, to simplify passing, etc.
@@ -122,6 +191,12 @@ pub fn qc<A: Debug + Clone>(
         println!("FAIL: shrinking");
         let mut rounds = 1;
         let mut smaller = shrink(input.clone());
+        if smaller.is_none() {
+            // shrink did not produce a value.
+            report(rounds, input);
+            assert!(false);
+            break;
+        }
         if check(&smaller.clone().unwrap()) {
             // shrink did not produce a failure.
             // TODO: this ought to be _shrinks_ and not shrink.
@@ -205,11 +280,8 @@ mod test {
     use super::*;
 
     //#[test]
-    //fn sample() {
-    //    for _ in 0..100 {
-    //        let list = gen_vec_i64(3);
-    //        dbg!(&list);
-    //    }
+    //fn test_sample() {
+    //    println!("{:#?}", sample(gen_color, 3, 100));
     //    assert!(false);
     //}
 
@@ -245,5 +317,11 @@ mod test {
             .with_shrink(shrink_i64)
             .with_size(i64::MAX as usize)
             .check(prop_abs_always_positive);
+
+        Qc::new()
+            .with_gen(gen_color_non_brown)
+            .with_shrink(shrink_color)
+            .with_size(i64::MAX as usize)
+            .check(prop_color_is_never_brown);
     }
 }
