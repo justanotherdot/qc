@@ -302,31 +302,17 @@ pub fn qc<A: Debug + Clone>(
 pub struct Qc<A> {
     runs: usize,
     size: usize, // TODO: ought to be optional.
-    gen: Option<fn(usize) -> A>,
-    shrink: Option<fn(A) -> Option<A>>,
+    gen: fn(usize) -> A,
+    shrink: fn(A) -> Option<A>,
 }
 
 impl<A: Debug + Clone> Qc<A> {
-    pub fn new() -> Self {
+    pub fn new(gen: fn(usize) -> A, shrink: fn(A) -> Option<A>) -> Self {
         Qc {
             runs: 100,
             size: 100,
-            gen: None,
-            shrink: None,
-        }
-    }
-
-    pub fn with_gen(self, gen: fn(usize) -> A) -> Self {
-        Qc {
-            gen: Some(gen),
-            ..self
-        }
-    }
-
-    pub fn with_shrink(self, shrink: fn(A) -> Option<A>) -> Self {
-        Qc {
-            shrink: Some(shrink),
-            ..self
+            gen,
+            shrink,
         }
     }
 
@@ -339,15 +325,7 @@ impl<A: Debug + Clone> Qc<A> {
     }
 
     pub fn check(self, property: fn(&A) -> bool) {
-        assert!(self.gen.is_some());
-        assert!(self.shrink.is_some());
-        qc(
-            property,
-            self.gen.unwrap(),
-            self.shrink.unwrap(),
-            self.size,
-            self.runs,
-        )
+        qc(property, self.gen, self.shrink, self.size, self.runs)
     }
 }
 
@@ -377,32 +355,21 @@ mod test {
         );
         qc(prop_abs_always_positive, gen_i64, shrink_i64, 100, 100);
 
-        Qc::new()
-            .with_gen(gen_vec_even_i64)
-            .with_shrink(shrink_vec_i64)
-            .check(prop_all_even);
+        Qc::new(gen_vec_even_i64, shrink_vec_i64).check(prop_all_even);
 
-        Qc::new()
-            .with_gen(gen_u64)
-            .with_shrink(shrink_u64)
+        Qc::new(gen_u64, shrink_u64)
             .with_size(1000)
             .check(prop_collatz_always_one);
 
-        Qc::new()
-            .with_gen(gen_i64)
-            .with_shrink(shrink_i64)
+        Qc::new(gen_i64, shrink_i64)
             .with_size(i64::MAX as usize)
             .check(prop_abs_always_positive);
 
-        Qc::new()
-            .with_gen(gen_color_non_brown)
-            .with_shrink(shrink_color)
+        Qc::new(gen_color_non_brown, shrink_color)
             .with_size(i64::MAX as usize)
             .check(prop_color_is_never_brown);
 
-        Qc::new()
-            .with_gen(gen_coordinate)
-            .with_shrink(shrink_coordinate)
+        Qc::new(gen_coordinate, shrink_coordinate)
             .with_size(f64::MAX as usize)
             .check(prop_wrap_longitude_always_in_bounds);
     }
