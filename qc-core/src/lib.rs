@@ -243,6 +243,7 @@ pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
     buffer
 }
 
+// Gen needs seed _and_ size.
 // remove need for Clone bound.
 // shrinking needs to be made optional?
 // probably should be a macro, to simplify passing, etc.
