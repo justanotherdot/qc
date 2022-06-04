@@ -1,5 +1,28 @@
 use std::fmt::Debug;
 
+pub fn gen_f64(size: usize) -> f64 {
+    rand::random::<f64>() % size as f64
+}
+
+// towards zero strategy.
+pub fn shrink_f64(number: f64) -> Option<f64> {
+    if number > 0.0 {
+        let nu = number / 2.0;
+        if nu < 0.0 {
+            return Some(0.0);
+        }
+        return Some(nu);
+    } else if number < 0.0 {
+        let nu = number * 2.0;
+        if nu > 0.0 {
+            return Some(0.0);
+        }
+        return Some(nu);
+    } else {
+        None
+    }
+}
+
 pub fn gen_i64(size: usize) -> i64 {
     rand::random::<i64>() % size as i64
 }
@@ -159,6 +182,59 @@ pub fn prop_color_is_never_brown(color: &Color) -> bool {
     !color.is_brown()
 }
 
+#[derive(Debug, Clone)]
+pub struct Coordinate {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+// an example where we ignore `size'
+pub fn gen_coordinate(_size: usize) -> Coordinate {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    Coordinate {
+        // to play, we pretend latitude is well-behaved.
+        latitude: rng.gen_range(-90.0..=90.0),
+        // but that the longitude extends it's bounds somewhat.
+        longitude: rng.gen_range(-1000.0..=1000.0),
+    }
+}
+
+pub fn shrink_coordinate(coordinate: Coordinate) -> Option<Coordinate> {
+    let latitude = shrink_f64(coordinate.latitude)?;
+    let longitude = shrink_f64(coordinate.longitude)?;
+    Some(Coordinate {
+        latitude,
+        longitude,
+    })
+}
+
+pub fn wrap_longitude(longitude: f64) -> f64 {
+    if longitude > 180.0 {
+        let wrap = ((longitude + 180.0) % 360.0) - 180.0;
+        if wrap == -180.0 {
+            return 180.0;
+        }
+        return wrap;
+    }
+    if longitude <= -180.0 {
+        return ((longitude - 180.0) % 360.0) + 180.0;
+    }
+    longitude
+}
+
+pub fn wrap_coordinate(coordinate: Coordinate) -> Coordinate {
+    Coordinate {
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude % 180.0,
+    }
+}
+
+pub fn prop_wrap_longitude_always_in_bounds(coordinate: &Coordinate) -> bool {
+    let wrapped = wrap_coordinate(coordinate.clone());
+    wrapped.longitude <= 180.0 && wrapped.longitude > -180.0
+}
+
 pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
     let mut buffer = Vec::with_capacity(count);
     for _ in 0..count {
@@ -207,12 +283,12 @@ pub fn qc<A: Debug + Clone>(
         while let Some(ref s) = smaller {
             rounds += 1;
             let nu = shrink(s.clone());
-            if check(&nu.clone().unwrap()) {
-                // deadend. can stop shrinking.
-                break;
-            }
             if nu.is_none() {
                 // can't shrink anymore.
+                break;
+            }
+            if check(&nu.clone().unwrap()) {
+                // deadend. can stop shrinking.
                 break;
             }
             smaller = nu;
@@ -281,7 +357,7 @@ mod test {
 
     //#[test]
     //fn test_sample() {
-    //    println!("{:#?}", sample(gen_color, 3, 100));
+    //    println!("{:#?}", sample(gen_coordinate, f64::MAX as usize, 10));
     //    assert!(false);
     //}
 
@@ -323,5 +399,11 @@ mod test {
             .with_shrink(shrink_color)
             .with_size(i64::MAX as usize)
             .check(prop_color_is_never_brown);
+
+        Qc::new()
+            .with_gen(gen_coordinate)
+            .with_shrink(shrink_coordinate)
+            .with_size(f64::MAX as usize)
+            .check(prop_wrap_longitude_always_in_bounds);
     }
 }
