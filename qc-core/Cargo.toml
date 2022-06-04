@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+fastrand = "1.7.0"
+rand = { version = "0.8.5", features = ["small_rng"] }
