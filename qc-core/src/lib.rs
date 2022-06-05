@@ -27,9 +27,23 @@ pub fn gen_i64(size: usize) -> i64 {
     rand::random::<i64>() % size as i64
 }
 
-// halving strategy.
+// halving towards strategy.
 pub fn shrink_i64(number: i64) -> Option<i64> {
-    Some(number / 2)
+    if number > 0 {
+        let nu = number / 2;
+        if nu < 0 {
+            return Some(0);
+        }
+        return Some(nu);
+    } else if number < 0 {
+        let nu = number * 2;
+        if nu > 0 {
+            return Some(0);
+        }
+        return Some(nu);
+    } else {
+        None
+    }
 }
 
 pub fn gen_u64(size: usize) -> u64 {
@@ -115,10 +129,7 @@ pub fn prop_abs_always_positive(input: &i64) -> bool {
 
 pub fn report<A: Debug>(rounds: usize, witness: A) {
     // needs document styled pretty printing for data.
-    println!(
-        "found smallest shrink after {} rounds\n  {:#?}",
-        rounds, witness
-    );
+    println!("=== Outcome ({} rounds) ===\n{:#?}", rounds, witness);
 }
 
 pub fn oneof<A: Clone>(options: &[fn(usize) -> A], size: usize) -> A {
@@ -263,6 +274,22 @@ impl<A: 'static> Gen<A> {
             shrink: Box::new(shrink),
         }
     }
+
+    pub fn filter<P>(self, predicate: P) -> Self
+    where
+        P: Fn(&A) -> bool + 'static,
+    {
+        let gen = move |size| {
+            for _ in 0..100 {
+                let generated = (self.gen)(size);
+                if predicate(&generated) {
+                    return generated;
+                }
+            }
+            todo!("generator discard");
+        };
+        Gen::new(gen, self.shrink)
+    }
 }
 
 // remove need for Clone bound?
@@ -400,5 +427,11 @@ mod test {
         Qc::new(Gen::new(gen_coordinate, move |_| none.clone()))
             .with_size(f64::MAX as usize)
             .check(prop_wrap_longitude_always_in_bounds);
+    }
+
+    #[test]
+    fn playground_filter() {
+        let gen_even_i64 = Gen::new(gen_i64, shrink_i64).filter(|x| x % 2 == 0);
+        Qc::new(gen_even_i64).check(|x| x % 2 == 0);
     }
 }
