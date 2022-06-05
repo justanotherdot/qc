@@ -29,23 +29,18 @@ pub fn gen_i64(size: usize) -> i64 {
 }
 
 // halving towards strategy.
-pub fn shrink_i64(number: &i64) -> Option<i64> {
-    let number = *number;
-    if number > 0 {
-        let nu = number / 2;
-        if nu < 0 {
-            return Some(0);
-        }
-        return Some(nu);
-    } else if number < 0 {
-        let nu = number * 2;
-        if nu > 0 {
-            return Some(0);
-        }
-        return Some(nu);
-    } else {
-        None
+pub fn shrink_i64(x: &i64) -> Option<i64> {
+    if *x == 0 {
+        return None;
     }
+    let y = x / 2;
+    if *x > 0 && y < 0 {
+        return None;
+    }
+    if *x < 0 && y > 0 {
+        return None;
+    }
+    return Some(y);
 }
 
 pub fn gen_u64(size: usize) -> u64 {
@@ -53,8 +48,12 @@ pub fn gen_u64(size: usize) -> u64 {
 }
 
 // halving strategy.
-pub fn shrink_u64(number: &u64) -> Option<u64> {
-    Some(number / 2)
+pub fn shrink_u64(x: &u64) -> Option<u64> {
+    if *x == 0 {
+        return None;
+    }
+    let y = x / 2;
+    return Some(y);
 }
 
 pub fn gen_vec<A>(size: usize, gen_element: fn(usize) -> A) -> Vec<A> {
@@ -98,7 +97,6 @@ pub fn prop_all_even(vec: &Vec<i64>) -> bool {
     vec.iter().all(|x| x % 2 == 0)
 }
 
-// could also do an abs check for playground.
 pub fn collatz(number: u64) -> u64 {
     if number <= 0 {
         return 1;
@@ -129,9 +127,15 @@ pub fn prop_abs_always_positive(input: &i64) -> bool {
     abs(*input) >= 0
 }
 
-pub fn report<A: Debug>(rounds: usize, witness: A) {
+pub fn report<A: Debug>(witness: A, shrinks: Vec<A>) {
     // needs document styled pretty printing for data.
-    println!("=== Outcome ({} rounds) ===\n{:#?}", rounds, witness);
+    println!("=== Outcome ===\n{:#?}", witness);
+    if !shrinks.is_empty() {
+        println!("=== Shrinks ===");
+    }
+    for shrink in shrinks {
+        println!("{:#?}", shrink);
+    }
 }
 
 pub fn oneof<A: Clone>(options: &[fn(usize) -> A], size: usize) -> A {
@@ -256,13 +260,9 @@ pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
     buffer
 }
 
-// Needs size _and_ seed.
-// also needs ability to _ignore_ size.
-// unless gen is the thing that ignores shrink?
 pub struct Gen<A> {
-    pub gen: Box<dyn Fn(usize) -> A>,
-    pub shrink: Box<dyn Fn(&A) -> Option<A>>,
-    //pub shrinks: Box<dyn Iterator<Item = A>>,
+    gen: Box<dyn Fn(usize) -> A>,
+    shrink: Box<dyn Fn(&A) -> Option<A>>,
 }
 
 impl<A: 'static> Gen<A> {
@@ -292,61 +292,89 @@ impl<A: 'static> Gen<A> {
         };
         Gen::new(gen, self.shrink)
     }
+
+    // `expand'.
+    pub fn iter(&self, size: usize) -> GenIter<A> {
+        GenIter {
+            inner: self,
+            current: None,
+            size: Some(size),
+        }
+    }
 }
 
-// shrinking needs to be made optional?
-pub fn qc<A: Debug>(check: fn(&A) -> bool, gen: Gen<A>, size: usize, runs: usize) {
-    let Gen { gen, shrink } = gen;
+pub struct GenIter<'a, A> {
+    inner: &'a Gen<A>,
+    current: Option<A>,
+    size: Option<usize>,
+}
+
+impl<'a, A: Clone> Iterator for GenIter<'a, A> {
+    type Item = GenValue<A>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        assert!(self.size.is_some());
+        match self.current {
+            None => {
+                self.current = Some((self.inner.gen)(self.size.unwrap()));
+                return self.current.clone().map(GenValue::Random);
+            }
+            Some(ref current) => {
+                self.current = (self.inner.shrink)(current);
+                return self.current.clone().map(GenValue::Shrink);
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum GenValue<A> {
+    Random(A),
+    Shrink(A),
+}
+
+impl<A> GenValue<A> {
+    fn into_inner(self) -> A {
+        use GenValue::*;
+        match self {
+            Random(a) => a,
+            Shrink(a) => a,
+        }
+    }
+}
+
+pub fn qc<A>(check: fn(&A) -> bool, gen: Gen<A>, size: usize, runs: usize)
+where
+    A: Debug + Clone + 'static,
+{
     for _ in 0..runs {
+        let mut iterator = gen.iter(size);
         // generate.
-        let input = gen(size);
+        let input = iterator.next().unwrap().into_inner();
         // check.
         if check(&input) {
             continue;
         }
         // shrink.
         println!("FAIL: shrinking");
-        let mut rounds = 1;
-        let mut smaller = shrink(&input);
+        let mut trail = Vec::new();
+        let smaller = iterator.next().map(GenValue::into_inner);
         if smaller.is_none() {
             // shrink did not produce a value.
-            report(rounds, input);
+            report(input, vec![]);
             assert!(false);
-            break;
         }
-        match smaller {
-            None => {
-                // shrink did not produce a value.
-                report(rounds, input);
-                assert!(false);
-                break;
-            }
-            Some(ref s) => {
-                if check(s) {
-                    // shrink did not produce a failure.
-                    // TODO: this ought to be _shrinks_ and not shrink.
-                    report(rounds, input);
-                    assert!(false);
-                    break;
-                }
+        trail.push(smaller.clone().unwrap());
+        let mut smallest = smaller;
+        for nu in iterator {
+            let n = nu.into_inner();
+            trail.push(n.clone());
+            if !check(&n) {
+                smallest = Some(n);
             }
         }
-        while let Some(ref s) = smaller {
-            rounds += 1;
-            let nu = shrink(s);
-            match nu {
-                None => break,
-                Some(ref n) => {
-                    if check(&n) {
-                        break;
-                    }
-                }
-            }
-            smaller = nu;
-        }
-        report(rounds, smaller.unwrap());
+        report(smallest.unwrap(), trail);
         assert!(false);
-        break;
     }
 }
 
@@ -356,7 +384,7 @@ pub struct Qc<A> {
     gen: Gen<A>,
 }
 
-impl<A: Debug + Clone> Qc<A> {
+impl<A: Debug + Clone + 'static> Qc<A> {
     pub fn new(gen: Gen<A>) -> Self {
         Qc {
             runs: 100,
@@ -444,5 +472,17 @@ mod test {
     fn playground_filter() {
         let gen_even_i64 = Gen::new(gen_i64, shrink_i64).filter(|x| x % 2 == 0);
         Qc::new(gen_even_i64).check(|x| x % 2 == 0);
+    }
+
+    #[test]
+    fn playground_gen_iter() {
+        let gen = Gen::new(gen_u64, shrink_u64);
+        let mut last_element = None;
+        for element in gen.iter(100) {
+            match last_element {
+                None => last_element = Some(element.into_inner()),
+                Some(ref last) => assert!(element.into_inner() < *last),
+            }
+        }
     }
 }
