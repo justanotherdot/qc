@@ -247,14 +247,21 @@ pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
 // also needs ability to _ignore_ size.
 // unless gen is the thing that ignores shrink?
 pub struct Gen<A> {
-    pub gen: fn(usize) -> A,
-    pub shrink: fn(A) -> Option<A>,
+    pub gen: Box<dyn Fn(usize) -> A>,
+    pub shrink: Box<dyn Fn(A) -> Option<A>>,
     //pub shrinks: Box<dyn Iterator<Item = A>>,
 }
 
-impl<A> Gen<A> {
-    pub fn new(gen: fn(usize) -> A, shrink: fn(A) -> Option<A>) -> Self {
-        Gen { gen, shrink }
+impl<A: 'static> Gen<A> {
+    pub fn new<G, S>(gen: G, shrink: S) -> Self
+    where
+        G: Fn(usize) -> A + 'static,
+        S: Fn(A) -> Option<A> + 'static,
+    {
+        Gen {
+            gen: Box::new(gen),
+            shrink: Box::new(shrink),
+        }
     }
 }
 
@@ -344,7 +351,7 @@ mod test {
     //}
 
     #[test]
-    fn playground() {
+    fn playground_qc() {
         qc(
             prop_all_even,
             Gen::new(gen_vec_even_i64, shrink_vec_i64),
@@ -367,7 +374,10 @@ mod test {
             100,
             100,
         );
+    }
 
+    #[test]
+    fn playground_builder() {
         Qc::new(Gen::new(gen_vec_even_i64, shrink_vec_i64)).check(prop_all_even);
 
         Qc::new(Gen::new(gen_u64, shrink_u64))
@@ -383,6 +393,11 @@ mod test {
             .check(prop_color_is_never_brown);
 
         Qc::new(Gen::new(gen_coordinate, shrink_coordinate))
+            .with_size(f64::MAX as usize)
+            .check(prop_wrap_longitude_always_in_bounds);
+
+        let none = None;
+        Qc::new(Gen::new(gen_coordinate, move |_| none.clone()))
             .with_size(f64::MAX as usize)
             .check(prop_wrap_longitude_always_in_bounds);
     }
