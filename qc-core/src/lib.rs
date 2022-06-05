@@ -5,7 +5,8 @@ pub fn gen_f64(size: usize) -> f64 {
 }
 
 // towards zero strategy.
-pub fn shrink_f64(number: f64) -> Option<f64> {
+pub fn shrink_f64(number: &f64) -> Option<f64> {
+    let number = *number;
     if number > 0.0 {
         let nu = number / 2.0;
         if nu < 0.0 {
@@ -28,7 +29,8 @@ pub fn gen_i64(size: usize) -> i64 {
 }
 
 // halving towards strategy.
-pub fn shrink_i64(number: i64) -> Option<i64> {
+pub fn shrink_i64(number: &i64) -> Option<i64> {
+    let number = *number;
     if number > 0 {
         let nu = number / 2;
         if nu < 0 {
@@ -51,7 +53,7 @@ pub fn gen_u64(size: usize) -> u64 {
 }
 
 // halving strategy.
-pub fn shrink_u64(number: u64) -> Option<u64> {
+pub fn shrink_u64(number: &u64) -> Option<u64> {
     Some(number / 2)
 }
 
@@ -74,7 +76,7 @@ pub fn gen_vec_i64(size: usize) -> Vec<i64> {
 }
 
 // basically next on an Iterator.
-pub fn shrink_vec_i64(vec: Vec<i64>) -> Option<Vec<i64>> {
+pub fn shrink_vec_i64(vec: &Vec<i64>) -> Option<Vec<i64>> {
     let len = vec.len();
     // actually, empty or does not cycle ...
     if vec.is_empty() {
@@ -185,7 +187,7 @@ pub fn gen_color_non_brown(size: usize) -> Color {
     oneof(&[|_| Color::Red, |_| Color::Green, |_| Color::Blue], size)
 }
 
-pub fn shrink_color(_color: Color) -> Option<Color> {
+pub fn shrink_color(_color: &Color) -> Option<Color> {
     None
 }
 
@@ -211,9 +213,9 @@ pub fn gen_coordinate(_size: usize) -> Coordinate {
     }
 }
 
-pub fn shrink_coordinate(coordinate: Coordinate) -> Option<Coordinate> {
-    let latitude = shrink_f64(coordinate.latitude)?;
-    let longitude = shrink_f64(coordinate.longitude)?;
+pub fn shrink_coordinate(coordinate: &Coordinate) -> Option<Coordinate> {
+    let latitude = shrink_f64(&coordinate.latitude)?;
+    let longitude = shrink_f64(&coordinate.longitude)?;
     Some(Coordinate {
         latitude,
         longitude,
@@ -259,7 +261,7 @@ pub fn sample<A>(gen: fn(usize) -> A, size: usize, count: usize) -> Vec<A> {
 // unless gen is the thing that ignores shrink?
 pub struct Gen<A> {
     pub gen: Box<dyn Fn(usize) -> A>,
-    pub shrink: Box<dyn Fn(A) -> Option<A>>,
+    pub shrink: Box<dyn Fn(&A) -> Option<A>>,
     //pub shrinks: Box<dyn Iterator<Item = A>>,
 }
 
@@ -267,7 +269,7 @@ impl<A: 'static> Gen<A> {
     pub fn new<G, S>(gen: G, shrink: S) -> Self
     where
         G: Fn(usize) -> A + 'static,
-        S: Fn(A) -> Option<A> + 'static,
+        S: Fn(&A) -> Option<A> + 'static,
     {
         Gen {
             gen: Box::new(gen),
@@ -292,9 +294,8 @@ impl<A: 'static> Gen<A> {
     }
 }
 
-// remove need for Clone bound?
 // shrinking needs to be made optional?
-pub fn qc<A: Debug + Clone>(check: fn(&A) -> bool, gen: Gen<A>, size: usize, runs: usize) {
+pub fn qc<A: Debug>(check: fn(&A) -> bool, gen: Gen<A>, size: usize, runs: usize) {
     let Gen { gen, shrink } = gen;
     for _ in 0..runs {
         // generate.
@@ -306,30 +307,40 @@ pub fn qc<A: Debug + Clone>(check: fn(&A) -> bool, gen: Gen<A>, size: usize, run
         // shrink.
         println!("FAIL: shrinking");
         let mut rounds = 1;
-        let mut smaller = shrink(input.clone());
+        let mut smaller = shrink(&input);
         if smaller.is_none() {
             // shrink did not produce a value.
             report(rounds, input);
             assert!(false);
             break;
         }
-        if check(&smaller.clone().unwrap()) {
-            // shrink did not produce a failure.
-            // TODO: this ought to be _shrinks_ and not shrink.
-            report(rounds, input);
-            assert!(false);
-            break;
+        match smaller {
+            None => {
+                // shrink did not produce a value.
+                report(rounds, input);
+                assert!(false);
+                break;
+            }
+            Some(ref s) => {
+                if check(s) {
+                    // shrink did not produce a failure.
+                    // TODO: this ought to be _shrinks_ and not shrink.
+                    report(rounds, input);
+                    assert!(false);
+                    break;
+                }
+            }
         }
         while let Some(ref s) = smaller {
             rounds += 1;
-            let nu = shrink(s.clone());
-            if nu.is_none() {
-                // can't shrink anymore.
-                break;
-            }
-            if check(&nu.clone().unwrap()) {
-                // deadend. can stop shrinking.
-                break;
+            let nu = shrink(s);
+            match nu {
+                None => break,
+                Some(ref n) => {
+                    if check(&n) {
+                        break;
+                    }
+                }
             }
             smaller = nu;
         }
