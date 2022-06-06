@@ -300,7 +300,7 @@ impl<A: 'static> Tree<A> {
     pub fn new<G, S>(gen: G, shrink: S, size: usize, seed: u64) -> Self
     where
         G: Fn(usize, u64) -> A + 'static,
-        S: Fn(&A) -> Option<A> + 'static + Copy,
+        S: Fn(&A) -> Option<A> + 'static,
     {
         let value = gen(size, seed);
         Tree {
