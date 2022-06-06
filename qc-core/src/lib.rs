@@ -18,17 +18,16 @@ pub fn shrink_f64(x: &f64) -> Option<f64> {
     }
     let y = x / 2.0;
     if *x > 0.0 && y <= 0.0 {
-        return None;
+        return Some(0.0);
     }
     if *x < 0.0 && y >= 0.0 {
-        return None;
+        return Some(0.0);
     }
     return Some(y);
 }
 
 pub fn gen_i32(size: usize, seed: u64) -> i32 {
-    let mut rng: StdRng = SeedableRng::seed_from_u64(seed);
-    rng.gen::<i32>() % size as i32
+    rng(seed).gen::<i32>() % size as i32
 }
 
 pub fn shrink_i32(x: &i32) -> Option<i32> {
@@ -37,10 +36,10 @@ pub fn shrink_i32(x: &i32) -> Option<i32> {
     }
     let y = x / 2;
     if *x > 0 && y <= 0 {
-        return None;
+        return Some(0);
     }
     if *x < 0 && y >= 0 {
-        return None;
+        return Some(0);
     }
     return Some(y);
 }
@@ -56,10 +55,10 @@ pub fn shrink_i64(x: &i64) -> Option<i64> {
     }
     let y = x / 2;
     if *x > 0 && y <= 0 {
-        return None;
+        return Some(0);
     }
     if *x < 0 && y >= 0 {
-        return None;
+        return Some(0);
     }
     return Some(y);
 }
@@ -292,6 +291,80 @@ pub fn sample<A>(gen: fn(usize, u64) -> A, size: usize, count: usize, seed: u64)
     buffer
 }
 
+pub struct Tree<A> {
+    pub value: A,
+    pub shrinks: Box<dyn Iterator<Item = A>>,
+}
+
+impl<A: 'static> Tree<A> {
+    pub fn new<G, S>(gen: G, shrink: S, size: usize, seed: u64) -> Self
+    where
+        G: Fn(usize, u64) -> A + 'static,
+        S: Fn(&A) -> Option<A> + 'static + Copy,
+    {
+        let value = gen(size, seed);
+        Tree {
+            shrinks: Box::new(std::iter::successors(shrink(&value), move |prior| {
+                shrink(&prior)
+            })),
+            value,
+        }
+    }
+
+    pub fn map<B, F>(self, f: F) -> Tree<B>
+    where
+        F: Fn(A) -> B + 'static,
+    {
+        Tree {
+            value: f(self.value),
+            shrinks: Box::new(self.shrinks.map(f)),
+        }
+    }
+
+    //pub fn filter<P>(self, p: P) -> Tree<B>
+    //where
+    //    P: Fn(A) -> bool + 'static,
+    //{
+    //    Tree {
+    //        value: f(self.value),
+    //        shrinks: Box::new(self.shrinks.map(f)),
+    //    }
+    //}
+}
+
+pub struct GenX<A> {
+    // just call it a tree.
+    pub shrinks: Box<dyn Fn(usize, u64) -> Tree<A>>,
+}
+
+impl<A: 'static> GenX<A> {
+    pub fn new<G, S>(gen: G, shrink: S) -> Self
+    where
+        G: Fn(usize, u64) -> A + 'static + Copy,
+        S: Fn(&A) -> Option<A> + 'static + Copy,
+    {
+        GenX {
+            shrinks: Box::new(move |size, seed| Tree::new(gen, shrink, size, seed)),
+        }
+    }
+
+    pub fn map<B, F>(self, f: F) -> GenX<B>
+    where
+        F: Fn(A) -> B + 'static + Copy,
+    {
+        let shrinks = Box::new(move |size, seed| (self.shrinks)(size, seed).map(f));
+        GenX { shrinks }
+    }
+
+    //pub fn filter<P>(self, predicate: P) -> Self
+    //where
+    //    P: Fn(&A) -> bool + 'static,
+    //{
+    //    let shrinks = Box::new(move |size, seed| (self.shrinks)(size, seed).filter(predicate));
+    //    GenX { shrinks }
+    //}
+}
+
 pub struct Gen<A> {
     gen: Box<dyn Fn(usize, u64) -> A>,
     shrink: Box<dyn Fn(&A) -> Option<A>>,
@@ -349,6 +422,40 @@ where
         trail.push(smaller.clone().unwrap());
         let mut smallest = smaller;
         while let Some(nu) = (gen.shrink)(smallest.as_ref().unwrap()) {
+            trail.push(nu.clone());
+            if !check(&nu) {
+                smallest = Some(nu.clone());
+            }
+        }
+        report(smallest.unwrap(), trail);
+        assert!(false);
+    }
+}
+
+pub fn qcx<A>(check: fn(&A) -> bool, gen: GenX<A>, size: usize, seed: u64, runs: usize)
+where
+    A: Debug + Clone + 'static,
+{
+    for _ in 0..runs {
+        // generate.
+        let mut tree = (gen.shrinks)(size, seed);
+        let input = tree.value;
+        // check.
+        if check(&input) {
+            continue;
+        }
+        // shrink.
+        println!("FAIL: shrinking");
+        let mut trail = Vec::new();
+        let smaller = tree.shrinks.next();
+        if smaller.is_none() {
+            // shrink did not produce a value.
+            report(input, vec![]);
+            assert!(false);
+        }
+        trail.push(smaller.clone().unwrap());
+        let mut smallest = smaller;
+        for nu in tree.shrinks {
             trail.push(nu.clone());
             if !check(&nu) {
                 smallest = Some(nu.clone());
@@ -487,5 +594,79 @@ mod test {
         let fst = (gen.gen)(size, seed);
         let snd = (gen.gen)(size, seed);
         assert_eq!(fst, snd);
+    }
+
+    #[test]
+    fn playground_shrink_tree() {
+        let size = 100;
+        let seed = 128;
+        let tree = Tree::new(gen_i32, shrink_i32, size, seed);
+        assert_eq!(tree.value, -14);
+        let shrinks: Vec<_> = tree.shrinks.collect();
+        assert_eq!(shrinks, vec![-7, -3, -1, 0]);
+    }
+
+    #[test]
+    fn playground_shrink_tree_map() {
+        #[derive(Debug, PartialEq)]
+        struct Int32(i32);
+        let size = 100;
+        let seed = 128;
+        let tree = Tree::new(gen_i32, shrink_i32, size, seed).map(Int32);
+        assert_eq!(tree.value, Int32(-14));
+        let shrinks: Vec<_> = tree.shrinks.collect();
+        assert_eq!(shrinks, vec![Int32(-7), Int32(-3), Int32(-1), Int32(0)]);
+    }
+
+    #[test]
+    fn playground_genx_works() {
+        let gen = GenX::new(gen_i32, shrink_i32);
+        let size = 100;
+        let seed = 128;
+        let value = (gen.shrinks)(size, seed).value;
+        assert_eq!(value, -14);
+        let shrinks: Vec<_> = (gen.shrinks)(size, seed).shrinks.collect();
+        assert_eq!(shrinks, vec![-7, -3, -1, 0]);
+    }
+
+    #[test]
+    fn playground_genx_map() {
+        let gen = GenX::new(gen_i32, shrink_i32);
+        let size = 100;
+        let seed = 128;
+        let value = (gen.shrinks)(size, seed).value;
+        assert_eq!(value, -14);
+        let shrinks: Vec<_> = (gen.shrinks)(size, seed).shrinks.collect();
+        assert_eq!(shrinks, vec![-7, -3, -1, 0]);
+    }
+
+    #[test]
+    fn playground_qcx() {
+        qcx(
+            |_| true,
+            GenX::new(gen_u64, shrink_u64),
+            rand::random(),
+            rand::random(),
+            100,
+        );
+        qcx(
+            prop_wrap_longitude_always_in_bounds,
+            GenX::new(gen_coordinate, shrink_coordinate),
+            rand::random(),
+            rand::random(),
+            100,
+        );
+        qcx(
+            prop_color_is_never_brown,
+            GenX::new(gen_u64, shrink_u64).map(|x| match x {
+                0 => Color::Red,
+                1 => Color::Green,
+                _ => Color::Blue,
+                //_ => Color::Brown,
+            }),
+            3,
+            12700567922805272197,
+            100,
+        );
     }
 }
